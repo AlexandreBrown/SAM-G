@@ -3,11 +3,11 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "efficientvit"
+name = "samg"
 version = "1.0.0"
-description = "EfficientViT from SAM-G"
+description = "SAM-G"
 readme = "README.md"
 requires-python = ">=3.9"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/efficientvit/"]
+packages = ["src/samg/"]
