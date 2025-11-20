@@ -1,6 +1,6 @@
 #!/bin/bash
+pip install -r ./baselines/samg/requirements.txt
 pip install ./baselines/samg/efficientvit/
-pip install ./baselines/samg/
 
 # Use the WEIGHTS_FOLDER environment variable if set, otherwise default to "weights"
 : "${WEIGHTS_FOLDER:=weights}"
