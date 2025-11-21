@@ -10,8 +10,8 @@ from efficientvit.sam_model_zoo import create_sam_model
 from efficientvit.models.efficientvit.sam import EfficientViTSamPredictor
 
 import cv2
-import matplotlib.pyplot as plt
 import warnings
+from pathlib import Path
 warnings.filterwarnings('ignore')
 
 
@@ -106,6 +106,7 @@ class SamEnvTransform(Transform):
         out_key: str,
         efficient_vit_model_name: str,
         efficient_vit_weights_path: str,
+        dino_repo_path: str,
         original_image_path: str,
         masked_image_path: str,
         extra_points_list: list = [],
@@ -114,6 +115,10 @@ class SamEnvTransform(Transform):
         super().__init__(device)
         self.in_key = in_key
         self.out_key = out_key
+        print(f"efficient_vit_weights_path exists?: {Path(efficient_vit_weights_path).exists()}")
+        print(f"original_image_path exists?: {Path(original_image_path).exists()}")
+        print(f"masked_image_path exists?: {Path(masked_image_path).exists()}")
+        torch.hub.set_dir(Path(efficient_vit_weights_path).parent.as_posix())
         efficientvit_sam = create_sam_model(
             name=efficient_vit_model_name,
             weight_url=efficient_vit_weights_path
@@ -128,7 +133,7 @@ class SamEnvTransform(Transform):
         # you should clone the dinov2 repo and put the path to the local directory (similar as efficientvit)
         # self.dino_model = torch.hub._load_local('../../../dinov2', 'dinov2_vitb14')
         
-        diov2_vit = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+        diov2_vit = torch.hub._load_local(dino_repo_path, 'dinov2_vitb14')
         
         self.dino_model = diov2_vit.cuda().eval()
         print("dino model loaded")

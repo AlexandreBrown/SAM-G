@@ -74,9 +74,12 @@ class Encoder(nn.Module):
 
 
 class ResEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, resnet_weights_path):
         super(ResEncoder, self).__init__()
-        self.model = resnet18(pretrained=True)
+        self.model = resnet18(weights=None)
+        state_dict = torch.load(resnet_weights_path, map_location="cpu")
+        self.model.load_state_dict(state_dict)
+        
         self.transform = transforms.Compose([
                 transforms.Resize(256),
                 transforms.CenterCrop(224)
@@ -228,7 +231,8 @@ class PIEGAgent(Agent):
         stddev_clip,
         dataset_dir,
         gamma,
-        action_dim
+        action_dim,
+        resnet_weights_path
     ):
         super().__init__(
             env_action_scaler=env_action_scaler,
@@ -244,7 +248,7 @@ class PIEGAgent(Agent):
         self.gamma = gamma
 
         # models
-        self.encoder = ResEncoder().to(device)
+        self.encoder = ResEncoder(resnet_weights_path=resnet_weights_path).to(device)
         actor = Actor(self.encoder.repr_dim, action_dim, feature_dim,
                            hidden_dim).to(device)
 
