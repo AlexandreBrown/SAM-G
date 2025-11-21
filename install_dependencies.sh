@@ -27,6 +27,7 @@ fi
 ########################################
 DINOV2_FILE="dinov2_vitb14_pretrain.pth"
 DINOV2_URL="https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/$DINOV2_FILE"
+git clone https://github.com/facebookresearch/dinov2.git third_parties/dinov2/
 
 if [ ! -f "$WEIGHTS_FOLDER/checkpoints/$DINOV2_FILE" ]; then
     echo "Creating $WEIGHTS_FOLDER/checkpoints/"
