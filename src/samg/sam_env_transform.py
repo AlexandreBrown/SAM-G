@@ -1,15 +1,11 @@
-import copy
 import torch
 import numpy as np
-import re
 import torch.nn.functional as F
 import torchvision.transforms as T
 import torch.nn as nn
 import cv2
 from segdac.data.mdp import MdpData
 from segdac_dev.envs.transforms.transform import Transform
-from collections import deque
-from typing import Any, NamedTuple
 from efficientvit.sam_model_zoo import create_sam_model
 from efficientvit.models.efficientvit.sam import EfficientViTSamPredictor
 
@@ -17,6 +13,7 @@ import cv2
 import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings('ignore')
+
 
 class Mask_Weights(nn.Module):
     def __init__(self):
@@ -103,13 +100,23 @@ def negative_point_selection(mask_sim, topk=1, box=None):
 	return n_topk_xy, n_topk_label
 
 class SamEnvTransform(Transform):
-    def __init__(self, device: str, in_key: str, out_key: str, efficient_vit_model_name: str, efficient_vit_weight_path: str, original_image_path: str, masked_image_path: str, extra_points_list: list = [], extra_masked_images_list: list = []):
+    def __init__(
+        self, device: str,
+        in_key: str,
+        out_key: str,
+        efficient_vit_model_name: str,
+        efficient_vit_weights_path: str,
+        original_image_path: str,
+        masked_image_path: str,
+        extra_points_list: list = [],
+        extra_masked_images_list: list = []
+    ):
         super().__init__(device)
         self.in_key = in_key
         self.out_key = out_key
         efficientvit_sam = create_sam_model(
             name=efficient_vit_model_name,
-            weight_url=efficient_vit_weight_path
+            weight_url=efficient_vit_weights_path
         )
         efficientvit_sam = efficientvit_sam.cuda().eval()
         self.efficientvit_sam_predictor = EfficientViTSamPredictor(efficientvit_sam)
@@ -120,8 +127,10 @@ class SamEnvTransform(Transform):
         # you need to put the downloaded checkpoint in your ~/.cache/torch/hub/checkpoints/ directory
         # you should clone the dinov2 repo and put the path to the local directory (similar as efficientvit)
         # self.dino_model = torch.hub._load_local('../../../dinov2', 'dinov2_vitb14')
-        self.dino_model = torch.hub._load_local('/home/ziyuwang21/workspace/DINOV2/dinov2', 'dinov2_vitb14')
-        self.dino_model.cuda().eval()
+        
+        diov2_vit = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
+        
+        self.dino_model = diov2_vit.cuda().eval()
         print("dino model loaded")
 
         self.dino_transform = T.Compose([T.ToTensor(),
@@ -357,14 +366,15 @@ class SamEnvTransform(Transform):
             self.dino_parts_target_feat = dino_parts_target_feat
 
     def reset(self, mdp_data: MdpData) -> MdpData:
-        images = mdp_data.data[self.in_key].squeeze(1).copy()  # (b,c,h,w)
-        mdp_data.data[self.out_key] = self._extract_pixels(images)
+        images = mdp_data.data[self.in_key].squeeze(1).clone()  # (b,c,h,w)
+        mdp_data.data[self.out_key] = self._extract_pixels(images).unsqueeze(0).unsqueeze(0) # (1, 1, c, h, w) because SAM-G only supports 1 env, second 1 is timestep axis
         return mdp_data
     
     def _extract_pixels(self, pixels):
         if len(pixels.shape) == 4:
             pixels = pixels[0]
-        obs = pixels.copy().transpose(2, 0, 1)
+        pixels = pixels.cpu().numpy() # (c,h,w)
+        obs = pixels.copy()
         obs_feat = obs.copy()
         dino_obs_feat = self.dino_transform(obs_feat.transpose(1, 2, 0)).unsqueeze(0).cuda()
         dino_obs_feat = self.dino_model.forward_features(dino_obs_feat)
@@ -488,9 +498,9 @@ class SamEnvTransform(Transform):
 
         mask = masks[best_idx]
         obs = obs * mask
-        return obs
+        return torch.from_numpy(obs).to(self.device)
         
     def step(self, mdp_data: MdpData) -> MdpData:
-        images = mdp_data.data[self.in_key].squeeze(1).copy()  # (b,c,h,w)
-        mdp_data.data[self.out_key] = self._extract_pixels(images)
+        images = mdp_data.data[self.in_key].squeeze(1).clone()  # (b,c,h,w)
+        mdp_data.data[self.out_key] = self._extract_pixels(images).unsqueeze(0).unsqueeze(0)
         return mdp_data

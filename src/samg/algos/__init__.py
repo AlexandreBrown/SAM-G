@@ -1,1 +1,1 @@
-from algos import pieg
+from samg.algos import pieg

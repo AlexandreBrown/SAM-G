@@ -20,3 +20,17 @@ if [ ! -f "$WEIGHTS_FOLDER/$SAM_WEIGHTS_FILE" ]; then
 else
     echo "EfficientViT-SAM weights already exists: $WEIGHTS_FOLDER/$SAM_WEIGHTS_FILE"
 fi
+
+########################################
+# DINOv2 ViT-B/14 weights
+########################################
+DINOV2_FILE="dinov2_vitb14_pretrain.pth"
+DINOV2_URL="https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/$DINOV2_FILE"
+
+if [ ! -f "$WEIGHTS_FOLDER/$DINOV2_FILE" ]; then
+    echo "Downloading $DINOV2_FILE..."
+    wget -q -O "$WEIGHTS_FOLDER/$DINOV2_FILE" "$DINOV2_URL"
+    echo "Download complete: $WEIGHTS_FOLDER/$DINOV2_FILE"
+else
+    echo "DINOv2 weights already exist: $WEIGHTS_FOLDER/$DINOV2_FILE"
+fi

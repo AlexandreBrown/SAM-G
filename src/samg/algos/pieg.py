@@ -9,6 +9,11 @@ from torchvision.models import resnet18, resnet34
 from torchvision import transforms
 import samg.utils as utils
 from samg.utils import random_overlay
+from tensordict import TensorDict
+from segdac.agents.agent import Agent
+from segdac.action_scaling.env_action_scaler import TanhEnvActionScaler
+from segdac.agents.action_sampling_strategy import ActionSamplingStrategy
+from segdac.data.mdp import MdpData
 
 
 
@@ -126,10 +131,8 @@ class ResEncoder(nn.Module):
         return out
 
 
-
-
 class Actor(nn.Module):
-    def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim):
+    def __init__(self, repr_dim, action_dim, feature_dim, hidden_dim):
         super().__init__()
 
         self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
@@ -139,7 +142,7 @@ class Actor(nn.Module):
                                     nn.ReLU(inplace=True),
                                     nn.Linear(hidden_dim, hidden_dim),
                                     nn.ReLU(inplace=True),
-                                    nn.Linear(hidden_dim, action_shape[0]))
+                                    nn.Linear(hidden_dim, action_dim))
 
         self.apply(utils.weight_init)
 
@@ -155,19 +158,19 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, repr_dim, action_shape, feature_dim, hidden_dim):
+    def __init__(self, repr_dim, action_dim, feature_dim, hidden_dim):
         super().__init__()
 
         self.trunk = nn.Sequential(nn.Linear(repr_dim, feature_dim),
                                    nn.LayerNorm(feature_dim), nn.Tanh())
 
         self.Q1 = nn.Sequential(
-            nn.Linear(feature_dim + action_shape[0], hidden_dim),
+            nn.Linear(feature_dim + action_dim, hidden_dim),
             nn.ReLU(inplace=True), nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True), nn.Linear(hidden_dim, 1))
 
         self.Q2 = nn.Sequential(
-            nn.Linear(feature_dim + action_shape[0], hidden_dim),
+            nn.Linear(feature_dim + action_dim, hidden_dim),
             nn.ReLU(inplace=True), nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(inplace=True), nn.Linear(hidden_dim, 1))
 
@@ -182,28 +185,81 @@ class Critic(nn.Module):
         return q1, q2
 
 
-class PIEGAgent:
-    def __init__(self, action_shape, device, lr, feature_dim,
-                 hidden_dim, critic_target_tau, num_expl_steps,
-                 update_every_steps, stddev_schedule, stddev_clip, use_tb):
+class SamgActionSamplingStrategy(ActionSamplingStrategy):
+    def __init__(
+        self, actor: nn.Module, encoder: nn.Module, stddev_schedule, num_expl_steps: int
+    ):
+        super().__init__(actor=actor)
+        self.encoder = encoder
+        self.stddev_schedule = stddev_schedule
+        self.scheduler_step = num_expl_steps
+
+    @torch.no_grad()
+    def forward(self, mdp_data: MdpData) -> TensorDict:
+        b, s, c, h, w = mdp_data.data["pixels_transformed"].shape
+        obs = self.encoder(mdp_data.data["pixels_transformed"].reshape(b, s * c, h, w))
+        stddev = utils.schedule(self.stddev_schedule, self.scheduler_step)
+        dist = self.actor(obs, stddev)
+
+        if self.is_stochasticity_enabled and self.is_exploration_enabled:
+            action = dist.sample(clip=None)
+        else:
+            action = dist.mean
+
+        return TensorDict(
+            {"unscaled_action": action}, batch_size=torch.Size([action.shape[0]])
+        )
+
+    def step(self, frames: int = 1):
+        self.scheduler_step += frames
+
+class PIEGAgent(Agent):
+    def __init__(
+        self,
+        env_action_scaler: TanhEnvActionScaler,
+        device,
+        lr,
+        feature_dim,
+        hidden_dim,
+        critic_target_tau,
+        num_expl_steps,
+        update_every_steps,
+        stddev_schedule,
+        stddev_clip,
+        dataset_dir,
+        gamma,
+        action_dim
+    ):
+        super().__init__(
+            env_action_scaler=env_action_scaler,
+            action_sampling_strategy=None,
+        )
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.update_every_steps = update_every_steps
-        self.use_tb = use_tb
         self.num_expl_steps = num_expl_steps
         self.stddev_schedule = stddev_schedule
         self.stddev_clip = stddev_clip
+        self.dataset_dir = dataset_dir
+        self.gamma = gamma
 
         # models
         self.encoder = ResEncoder().to(device)
-        self.actor = Actor(self.encoder.repr_dim, action_shape, feature_dim,
+        actor = Actor(self.encoder.repr_dim, action_dim, feature_dim,
                            hidden_dim).to(device)
 
-        self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
+        self.critic = Critic(self.encoder.repr_dim, action_dim, feature_dim,
                              hidden_dim).to(device)
-        self.critic_target = Critic(self.encoder.repr_dim, action_shape,
+        self.critic_target = Critic(self.encoder.repr_dim, action_dim,
                                     feature_dim, hidden_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
+        
+        self.action_sampling_strategy = SamgActionSamplingStrategy(
+            actor=actor,
+            encoder=self.encoder,
+            stddev_schedule=stddev_schedule,
+            num_expl_steps=num_expl_steps
+        )
 
         # optimizers
         self.encoder_opt = torch.optim.Adam(self.encoder.parameters(), lr=lr)
@@ -216,26 +272,66 @@ class PIEGAgent:
         self.train()
         self.critic_target.train()
 
-    def train(self, training=True):
-        self.training = training
-        self.encoder.train(training)
-        self.actor.train(training)
-        self.critic.train(training)
+    @property
+    def actor(self):
+        return self.action_sampling_strategy.actor
 
-    def act(self, obs, step, eval_mode):
-        obs = torch.as_tensor(obs, device=self.device)
-        obs = self.encoder(obs.unsqueeze(0))
-        stddev = utils.schedule(self.stddev_schedule, step)
-        dist = self.actor(obs, stddev)
-        if eval_mode:
-            action = dist.mean
-        else:
-            action = dist.sample(clip=None)
-            if step < self.num_expl_steps:
-                action.uniform_(-1.0, 1.0)
-        return action.cpu().numpy()[0]
+    def train(self, mode=True):
+        self.training = mode
+        self.encoder.train(mode)
+        self.actor.train(mode)
+        self.critic.train(mode)
+        return self
 
-    def update_critic(self, obs, action, reward, discount, next_obs, step, aug_obs):
+
+    def update(
+        self, train_mdp_data: MdpData, env_step: int, is_time_to_evaluate: bool
+    ) -> TensorDict:
+        if env_step % self.update_every_steps != 0:
+            return TensorDict({}, batch_size=torch.Size([]))
+        
+        logs_data = {}
+
+        b, s, c, h, w = train_mdp_data.data["pixels_transformed"].shape
+        obs = train_mdp_data.data["pixels_transformed"].reshape(b, s * c, h, w) # (b,s,c,h,w)
+        action = train_mdp_data.data["action"]
+        reward = train_mdp_data.next.data["reward"].reshape(-1, 1)
+        next_obs = train_mdp_data.next.data["pixels_transformed"].reshape(b, s * c, h, w)
+        not_done = (~train_mdp_data.next.data["done"].reshape(-1, 1)).float()
+        discount = train_mdp_data.next.data.get(
+            "gamma", torch.tensor([self.gamma], device=not_done.device)
+        ).reshape(-1, 1)
+
+        # augment
+        obs = self.aug(obs.float())
+        original_obs = obs.clone()
+        next_obs = self.aug(next_obs.float())
+        # encode
+        obs = self.encoder(obs)
+
+        # strong augmentation
+        aug_obs = self.encoder(random_overlay(original_obs, dataset_dir=self.dataset_dir))
+
+        with torch.no_grad():
+            next_obs = self.encoder(next_obs)
+
+        # update critic
+        logs_data.update(
+            self.update_critic(obs, action, reward, next_obs, env_step, aug_obs, is_time_to_evaluate, not_done, discount)
+        )
+
+        # update actor
+        logs_data.update(self.update_actor(obs.detach(), env_step, is_time_to_evaluate))
+
+        # update critic target
+        utils.soft_update_params(self.critic, self.critic_target,
+                                 self.critic_target_tau)
+
+
+        return TensorDict(logs_data, batch_size=torch.Size([]))
+
+
+    def update_critic(self, obs, action, reward, next_obs, step, aug_obs, is_time_to_evaluate: bool, not_done, discount):
         metrics = dict()
 
         with torch.no_grad():
@@ -244,7 +340,7 @@ class PIEGAgent:
             next_action = dist.sample(clip=self.stddev_clip)
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V = torch.min(target_Q1, target_Q2)
-            target_Q = reward + (discount * target_V)
+            target_Q = reward + (not_done * discount * target_V)
 
         Q1, Q2 = self.critic(obs, action)
         critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
@@ -254,11 +350,11 @@ class PIEGAgent:
 
         critic_loss = 0.5 * (critic_loss + aug_loss)
 
-        if self.use_tb:
-            metrics['critic_target_q'] = target_Q.mean().item()
-            metrics['critic_q1'] = Q1.mean().item()
-            metrics['critic_q2'] = Q2.mean().item()
-            metrics['critic_loss'] = critic_loss.item()
+        if is_time_to_evaluate:
+            metrics['critic_target_q'] = target_Q.mean()
+            metrics['critic_q1'] = Q1.detach().mean()
+            metrics['critic_q2'] = Q2.detach().mean()
+            metrics['critic_loss'] = critic_loss.detach()
 
         # optimize encoder and critic
         self.encoder_opt.zero_grad(set_to_none=True)
@@ -269,7 +365,7 @@ class PIEGAgent:
 
         return metrics
 
-    def update_actor(self, obs, step):
+    def update_actor(self, obs, step, is_time_to_evaluate):
         metrics = dict()
 
         stddev = utils.schedule(self.stddev_schedule, step)
@@ -286,48 +382,9 @@ class PIEGAgent:
         actor_loss.backward()
         self.actor_opt.step()
 
-        if self.use_tb:
-            metrics['actor_loss'] = actor_loss.item()
-            metrics['actor_logprob'] = log_prob.mean().item()
-            metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
-
-        return metrics
-
-    def update(self, replay_iter, step):
-        metrics = dict()
-
-        if step % self.update_every_steps != 0:
-            return metrics
-
-        batch = next(replay_iter)
-        obs, action, reward, discount, next_obs = utils.to_torch(
-            batch, self.device)
-
-        # augment
-        obs = self.aug(obs.float())
-        original_obs = obs.clone()
-        next_obs = self.aug(next_obs.float())
-        # encode
-        obs = self.encoder(obs)
-
-        # strong augmentation
-        aug_obs = self.encoder(random_overlay(original_obs))
-
-        with torch.no_grad():
-            next_obs = self.encoder(next_obs)
-
-        if self.use_tb:
-            metrics['batch_reward'] = reward.mean().item()
-
-        # update critic
-        metrics.update(
-            self.update_critic(obs, action, reward, discount, next_obs, step, aug_obs))
-
-        # update actor
-        metrics.update(self.update_actor(obs.detach(), step))
-
-        # update critic target
-        utils.soft_update_params(self.critic, self.critic_target,
-                                 self.critic_target_tau)
+        if is_time_to_evaluate:
+            metrics['actor_loss'] = actor_loss.detach()
+            metrics['actor_logprob'] = log_prob.detach.mean()
+            metrics['actor_ent'] = dist.detach().entropy().sum(dim=-1).mean()
 
         return metrics
