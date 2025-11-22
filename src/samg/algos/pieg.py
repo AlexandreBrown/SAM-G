@@ -389,6 +389,6 @@ class PIEGAgent(Agent):
         if is_time_to_evaluate:
             metrics['actor_loss'] = actor_loss.detach()
             metrics['actor_logprob'] = log_prob.detach().mean()
-            metrics['actor_ent'] = dist.detach().entropy().sum(dim=-1).mean()
+            metrics['actor_ent'] = dist.entropy().detach().sum(dim=-1).mean()
 
         return metrics
