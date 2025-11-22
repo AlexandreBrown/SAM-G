@@ -1,6 +1,6 @@
 #!/bin/bash
 pip uninstall efficientvit -y
-pip install -r baselines/samg/requirements.txt
+pip install torchpack
 
 # Use the WEIGHTS_FOLDER environment variable if set, otherwise default to "weights"
 : "${WEIGHTS_FOLDER:=weights}"
