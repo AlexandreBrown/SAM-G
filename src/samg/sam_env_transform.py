@@ -115,9 +115,10 @@ class SamEnvTransform(Transform):
         super().__init__(device)
         self.in_key = in_key
         self.out_key = out_key
-        print(f"efficient_vit_weights_path exists?: {Path(efficient_vit_weights_path).exists()}")
-        print(f"original_image_path exists?: {Path(original_image_path).exists()}")
-        print(f"masked_image_path exists?: {Path(masked_image_path).exists()}")
+        print(f"efficient_vit_weights_path {efficient_vit_weights_path} exists?: {Path(efficient_vit_weights_path).exists()}")
+        print(f"original_image_path {original_image_path} exists?: {Path(original_image_path).exists()}")
+        print(f"masked_image_path {masked_image_path} exists?: {Path(masked_image_path).exists()}")
+        print(f"dino_repo_path {dino_repo_path} exists?: {Path(dino_repo_path).exists()}")
         torch.hub.set_dir(Path(efficient_vit_weights_path).parent.as_posix())
         efficientvit_sam = create_sam_model(
             name=efficient_vit_model_name,
