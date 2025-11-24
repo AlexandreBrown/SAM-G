@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "efficientvit"
+version = "1.0.0"
+authors = []
+description = "efficientvit"
+readme = "README.md"
+requires-python = ">=3.9"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/efficientvit/"]
