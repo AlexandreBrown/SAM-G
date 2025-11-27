@@ -172,7 +172,7 @@ def load_config(key=None):
     return data
 
 
-def _load_places(dataset_dir, batch_size=256, image_size=84, num_workers=8, use_val=False):
+def _load_places(dataset_dir, batch_size=256, image_size=84, num_workers=4, use_val=False):
     global places_dataloader, places_iter
     partition = 'val' if use_val else 'train'
     print(f'Loading {partition} partition of places365_standard...')
@@ -222,13 +222,13 @@ def cat(x, y, axis=0):
     return torch.cat([x, y], axis=0)
 
 
-def attribution_augmentation(x, mask, dataset="places365_standard"):
+def attribution_augmentation(x, dataset_dir, mask, dataset="places365_standard"):
     """Complete non importnant pixels with a random image from Places"""
     global places_iter
 
     if dataset == "places365_standard":
         if places_dataloader is None:
-            _load_places(batch_size=x.size(0), image_size=x.size(-1))
+            _load_places(dataset_dir=dataset_dir, batch_size=x.size(0), image_size=x.size(-1))
         imgs = _get_places_batch(batch_size=x.size(0)).repeat(1, x.size(1) // 3, 1, 1)
     else:
         raise NotImplementedError(
