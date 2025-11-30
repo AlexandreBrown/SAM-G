@@ -373,9 +373,17 @@ class SamEnvTransform(Transform):
 
     def reset(self, mdp_data: MdpData) -> MdpData:
         images = mdp_data.data[self.in_key].squeeze(1).clone()  # (b,c,h,w)
-        mdp_data.data[self.out_key] = self._extract_pixels(images).unsqueeze(0).unsqueeze(0) # (1, 1, c, h, w) because SAM-G only supports 1 env, second 1 is timestep axis
+        mdp_data.data[self.out_key] = self._batch_extract_pixels(images)
         return mdp_data
     
+    def _batch_extract_pixels(self, images):
+        out = []
+        for img in images:
+            extracted_img = self._extract_pixels(img).unsqueeze(0)
+            out.append(extracted_img)
+        
+        return torch.stack(out)
+
     def _extract_pixels(self, pixels):
         if len(pixels.shape) == 4:
             pixels = pixels[0]
@@ -508,5 +516,5 @@ class SamEnvTransform(Transform):
         
     def step(self, mdp_data: MdpData) -> MdpData:
         images = mdp_data.data[self.in_key].squeeze(1).clone()  # (b,c,h,w)
-        mdp_data.data[self.out_key] = self._extract_pixels(images).unsqueeze(0).unsqueeze(0)
+        mdp_data.data[self.out_key] = self._batch_extract_pixels(images)
         return mdp_data
